@@ -13,9 +13,11 @@
   const escape = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const style = document.createElement('style');
   style.textContent = '.account-error{font-size:12px;color:#ff9b91;min-height:18px;margin:5px 0}.account-switch,.account-signout{width:100%;margin-top:12px}.friend-list{display:grid;gap:7px;margin-top:18px;max-height:260px;overflow:auto}.friend-entry{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid #ffffff12;padding:11px 0}.friend-entry strong{font-size:13px}.friend-entry small{display:block;color:#9bb0b8;font-size:11px}.friend-entry button{font-size:11px;padding:7px 10px}.account-tabs{display:flex;gap:7px;margin:8px 0 12px}.account-tabs button{flex:1}.rank-summary{color:#9bb0b8;font-size:12px;margin:5px 0 12px}.online-section-title{font:700 20px var(--display);text-transform:uppercase;letter-spacing:.04em;margin:18px 0 0}.online-choice{min-width:86px}.online-wait{color:#d6f36a;font-weight:700}.live-badge{display:inline-flex;gap:7px;align-items:center;color:#d6f36a;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}.live-badge:before{content:"";width:7px;height:7px;border-radius:50%;background:#d6f36a;box-shadow:0 0 10px #d6f36a}';
+  style.textContent += '.modal{max-height:90vh;overflow:auto}.room-panel{border:1px solid #ffffff16;background:#ffffff06;border-radius:14px;padding:13px;margin-top:10px}.room-panel>.btn{width:100%;margin-top:10px}.room-panel .field{margin:12px 0 0}.room-share{display:grid;gap:8px;border-top:1px solid #ffffff18;margin-top:14px;padding-top:13px}.room-share strong{font:800 30px var(--display);letter-spacing:.12em;color:var(--lime);overflow-wrap:anywhere}.room-share small{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.room-share[hidden]{display:none}';
   document.head.append(style);
   let session = readSession(), user = null, profile = null, friends = [], authMode = 'signin', savingMatch = false;
   let realtimeClient = null, realtimeChannel = null, activeOnlineId = null, activeOnlineMatch = null, activeOpponent = null, lastRenderedKick = 0, onlineRenderVersion = 0, onlineSubmitting = false;
+  let roomIdentity = null, activeRoomMeta = null, activeRoomData = null, roomPollTimer = null, roomPollBusy = false, lastRoomKick = -1, roomSubmitting = false, roomMatchStarted = false, onlineFieldResetTimer = null;
   try { realtimeClient = window.supabase?.createClient(PROJECT_URL, PUBLIC_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }) || null; } catch { realtimeClient = null; }
 
   function readSession() { try { const old = JSON.parse(localStorage.getItem('pm-auth-session') || 'null'); const fragment = new URLSearchParams(location.hash.slice(1)); const access_token = fragment.get('access_token'); const refresh_token = fragment.get('refresh_token'); if (access_token && refresh_token) { const fresh = { access_token, refresh_token, expires_at: Math.floor(Date.now() / 1000) + Number(fragment.get('expires_in') || 3600) }; localStorage.setItem('pm-auth-session', JSON.stringify(fresh)); history.replaceState(null, '', location.pathname + location.search); return fresh; } return old; } catch { return null; } }
@@ -162,7 +164,7 @@
   const showEmpty = (target, message) => { const p = document.createElement('p'); p.className = 'rank-summary'; p.textContent = message; $(target).replaceChildren(p); };
   async function loadOnlineLobby() {
     const inviteHost = $('#onlineInvites'), friendHost = $('#onlineFriends');
-    if (!user || !profile) { showEmpty('#onlineInvites', 'Sign in and set a player handle to play online.'); showEmpty('#onlineFriends', 'Your accepted friends will appear here.'); return; }
+    if (!user || !profile) { showEmpty('#onlineInvites', 'Sign in to see friend invites. Room play is open to everyone.'); showEmpty('#onlineFriends', 'Sign in and set a handle to challenge accepted friends.'); return; }
     if (!realtimeChannel) connectRealtime();
     try {
       const [matches, accepted] = await Promise.all([
@@ -201,6 +203,201 @@
       }
     } catch (e) { say('#onlineError', e.message); }
   }
+
+  function roomDisplayName() {
+    const raw = profile?.display_name || localStorage.getItem('pm-name') || user?.email?.split('@')[0] || 'Guest';
+    return String(raw).trim().replace(/[<>]/g, '').slice(0, 24) || 'Guest';
+  }
+  function newRoomCode() {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const bytes = new Uint8Array(10);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('');
+  }
+  function readSavedRoomSession() {
+    try { return JSON.parse(localStorage.getItem('pm-room-session') || 'null'); } catch { return null; }
+  }
+  async function authUserForToken(accessToken) {
+    if (!accessToken) return null;
+    const r = await fetch(`${PROJECT_URL}/auth/v1/user`, { headers: { apikey: PUBLIC_KEY, Authorization: `Bearer ${accessToken}` } });
+    return r.ok ? r.json().catch(() => null) : null;
+  }
+  async function refreshGuestSession(saved) {
+    if (!saved?.refresh_token) return null;
+    if (!saved.expires_at || saved.expires_at > Math.floor(Date.now() / 1000) + 45) return saved;
+    const r = await fetch(`${PROJECT_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST', headers: { apikey: PUBLIC_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: saved.refresh_token })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.access_token) return null;
+    d.expires_at = Math.floor(Date.now() / 1000) + (d.expires_in || 3600);
+    try { localStorage.setItem('pm-room-session', JSON.stringify(d)); } catch {}
+    return d;
+  }
+  async function getRoomIdentity() {
+    const targetId = activeRoomMeta?.playerId;
+    if (roomIdentity && (targetId ? roomIdentity.user.id === targetId : roomIdentity.permanent)) {
+      if (roomIdentity.permanent) {
+        if (session?.expires_at && session.expires_at < Math.floor(Date.now() / 1000) + 45) await refreshSession();
+        if (session?.access_token) roomIdentity.session = session;
+      } else {
+        roomIdentity.session = await refreshGuestSession(roomIdentity.session) || roomIdentity.session;
+      }
+      return roomIdentity;
+    }
+
+    let mainIdentity = null;
+    if (session?.access_token) {
+      if (session.expires_at && session.expires_at < Math.floor(Date.now() / 1000) + 45) await refreshSession();
+      if (session?.access_token) {
+        const authUser = user?.id ? user : await authUserForToken(session.access_token);
+        if (authUser?.id) mainIdentity = { user: authUser, session, permanent: !authUser.is_anonymous };
+      }
+    }
+
+    let cachedIdentity = null;
+    let saved = readSavedRoomSession();
+    if (saved) {
+      saved = await refreshGuestSession(saved);
+      const authUser = saved?.access_token ? await authUserForToken(saved.access_token) : null;
+      if (authUser?.id) cachedIdentity = { user: authUser, session: saved, permanent: !authUser.is_anonymous };
+      else { try { localStorage.removeItem('pm-room-session'); } catch {} }
+    }
+
+    if (targetId) {
+      const matched = [mainIdentity, cachedIdentity].find((candidate) => candidate?.user.id === targetId);
+      if (!matched) throw new Error('This browser no longer has the room session. Reopen the room on the device that created or joined it.');
+      roomIdentity = matched;
+      return roomIdentity;
+    }
+    if (mainIdentity && !mainIdentity.user.is_anonymous) { roomIdentity = mainIdentity; return roomIdentity; }
+    if (cachedIdentity && cachedIdentity.user.is_anonymous) { roomIdentity = cachedIdentity; return roomIdentity; }
+    if (mainIdentity) { roomIdentity = mainIdentity; return roomIdentity; }
+    if (cachedIdentity) { roomIdentity = cachedIdentity; return roomIdentity; }
+
+    if (!realtimeClient) throw new Error('Guest rooms are unavailable right now. Refresh and try again.');
+    const { data, error } = await realtimeClient.auth.signInAnonymously();
+    if (error || !data?.session || !data.user) {
+      const message = error?.message || 'Could not start a guest session.';
+      if (/anonymous/i.test(message) && /disabled|not enabled|not allowed/i.test(message)) {
+        throw new Error('Guest rooms need “Allow anonymous sign-ins” enabled in Supabase Auth settings.');
+      }
+      throw new Error(message);
+    }
+    const guestSession = data.session;
+    guestSession.expires_at ||= Math.floor(Date.now() / 1000) + (guestSession.expires_in || 3600);
+    try { localStorage.setItem('pm-room-session', JSON.stringify(guestSession)); } catch {}
+    roomIdentity = { user: data.user, session: guestSession, permanent: false };
+    return roomIdentity;
+  }
+  async function roomRequest(path, options = {}) {
+    const identity = await getRoomIdentity();
+    const headers = {
+      apikey: PUBLIC_KEY,
+      Authorization: `Bearer ${identity.session.access_token}`,
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    };
+    const r = await fetch(`${PROJECT_URL}${path}`, { ...options, headers });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) {
+      const error = new Error(data?.message || data?.details || data?.hint || data?.error_description || `Room request failed (${r.status}).`);
+      error.status = r.status;
+      throw error;
+    }
+    return data;
+  }
+  function saveRoomMeta(meta) {
+    activeRoomMeta = meta;
+    try { localStorage.setItem('pm-active-room', JSON.stringify(meta)); } catch {}
+  }
+  function roomInviteUrl(code) {
+    const url = new URL(location.pathname, location.origin);
+    url.searchParams.set('room', code);
+    return url.href;
+  }
+  function showRoomShare(meta) {
+    $('#roomSharePanel').hidden = false;
+    $('#roomCodeValue').textContent = meta.code;
+    $('#roomShareHelp').textContent = `Share this link: ${roomInviteUrl(meta.code)} · Waiting for someone to join…`;
+    $('#copyRoomButton').textContent = 'Copy invite link';
+  }
+  async function createRoom() {
+    const button = $('#createRoomButton');
+    button.disabled = true;
+    say('#onlineError', 'Opening a room…');
+    try {
+      const identity = await getRoomIdentity();
+      let created = false;
+      for (let attempt = 0; attempt < 3 && !created; attempt++) {
+        const code = newRoomCode(), id = crypto.randomUUID();
+        try {
+          await roomRequest('/rest/v1/penalty_rooms', {
+            method: 'POST', headers: { Prefer: 'return=minimal' },
+            body: JSON.stringify({ id, code, host_id: identity.user.id, host_name: roomDisplayName() })
+          });
+          saveRoomMeta({ id, code, side: 'host', playerId: identity.user.id });
+          activeRoomData = null; roomMatchStarted = false; lastRoomKick = -1;
+          showRoomShare(activeRoomMeta); say('#onlineError', 'Room ready. Share the code or link.');
+          startRoomPolling(); created = true;
+        } catch (e) { if (e.status !== 409 || attempt === 2) throw e; }
+      }
+      return created;
+    } catch (e) { say('#onlineError', e.message); return false; }
+    finally { button.disabled = false; }
+  }
+  async function joinRoom() {
+    const button = $('#joinRoomButton');
+    const code = $('#roomCodeInput').value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, '').slice(0, 10);
+    $('#roomCodeInput').value = code;
+    if (!/^[A-HJ-NP-Z2-9]{10}$/.test(code)) return say('#onlineError', 'Enter the 10-character room code.');
+    button.disabled = true; say('#onlineError', 'Joining the room…');
+    try {
+      const identity = await getRoomIdentity();
+      const id = await roomRequest('/rest/v1/rpc/join_penalty_room', {
+        method: 'POST', body: JSON.stringify({ p_code: code, p_guest_name: roomDisplayName() })
+      });
+      saveRoomMeta({ id: String(id), code, side: 'guest', playerId: identity.user.id });
+      activeRoomData = null; roomMatchStarted = false; lastRoomKick = -1;
+      $('#roomSharePanel').hidden = true; $('#onlineModal').classList.remove('open');
+      startRoomPolling(); await refreshActiveRoom();
+    } catch (e) { say('#onlineError', e.message); }
+    finally { button.disabled = false; }
+  }
+  function startRoomPolling() {
+    clearInterval(roomPollTimer);
+    roomPollTimer = setInterval(refreshActiveRoom, 1400);
+    refreshActiveRoom();
+  }
+  function stopRoomPolling() { clearInterval(roomPollTimer); roomPollTimer = null; }
+  async function refreshActiveRoom() {
+    if (!activeRoomMeta || roomPollBusy) return;
+    roomPollBusy = true;
+    try {
+      const rows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,host_name,guest_name,status,kick_no,score_host,score_guest,saves_host,saves_guest,pending_host,pending_guest,score_history,winner_id,updated_at&id=eq.${encodeURIComponent(activeRoomMeta.id)}&limit=1`);
+      if (!rows?.length) throw new Error('This room is no longer available.');
+      const previous = activeRoomData;
+      activeRoomData = rows[0];
+      if (activeRoomData.status === 'waiting') {
+        showRoomShare(activeRoomMeta);
+        $('#roomShareHelp').textContent = `Share this link: ${roomInviteUrl(activeRoomMeta.code)} · Waiting for someone to join…`;
+        return;
+      }
+      if (!roomMatchStarted && window.penaltyMindsetBeginOnline) {
+        roomMatchStarted = true; $('#onlineModal').classList.remove('open');
+        window.penaltyMindsetBeginOnline();
+      }
+      if (previous && activeRoomData.kick_no > previous.kick_no) {
+        const event = activeRoomData.score_history?.[activeRoomData.kick_no - 1];
+        if (event) animateOnlineKick(event);
+      }
+      lastRoomKick = activeRoomData.kick_no;
+      renderRoomState(activeRoomData);
+      if (activeRoomData.status === 'completed') stopRoomPolling();
+    } catch (e) { say('#onlineError', e.message); }
+    finally { roomPollBusy = false; }
+  }
   async function createOnlineInvite(friendId) {
     if (!user || !profile) { $('#accountModal').classList.add('open'); return; }
     say('#onlineError', 'Sending your challenge…');
@@ -221,6 +418,8 @@
   }
   async function openOnlineMatch(id) {
     if (!user || !profile) return;
+    activeRoomMeta = activeRoomData = null; roomMatchStarted = false; stopRoomPolling();
+    try { localStorage.removeItem('pm-active-room'); } catch {}
     try {
       const rows = await rest('penalty_online_matches', `id=eq.${id}&limit=1`);
       if (!rows?.length) throw new Error('This shootout is no longer available.');
@@ -249,11 +448,61 @@
     } catch (e) { say('#onlineError', e.message); }
   }
   function animateOnlineKick(event) {
-    const directionX = (d) => d === 'left' ? '22%' : d === 'right' ? '78%' : '50%';
-    const ball = $('#shotBall'), keeper = $('#keeper');
-    ball.className = 'shot-ball fly'; ball.style.left = directionX(event.shot_direction); ball.style.top = event.shot_direction === 'center' ? '17%' : '22%';
-    keeper.style.left = directionX(event.save_direction); $('#callout span').textContent = event.scored ? 'GOAL!' : 'SAVED!'; $('#callout').classList.add('show');
-    setTimeout(() => $('#callout').classList.remove('show'), 800);
+    const directionX = (d) => d === 'left' ? '34%' : d === 'right' ? '66%' : '50%';
+    const directionY = (d) => d === 'center' ? '22%' : '15%';
+    if (onlineFieldResetTimer) clearTimeout(onlineFieldResetTimer);
+    const ball = $('#shotBall'), keeper = $('#keeper'), striker = $('#striker');
+    ball.className = 'shot-ball fly'; ball.style.left = directionX(event.shot_direction); ball.style.top = directionY(event.shot_direction);
+    keeper.style.left = directionX(event.save_direction); keeper.style.top = '22%';
+    striker.style.left = directionX(event.shot_direction);
+    $('#callout span').textContent = event.scored ? 'GOAL!' : 'SAVED!'; $('#callout').classList.add('show');
+    onlineFieldResetTimer = setTimeout(() => {
+      $('#callout').classList.remove('show');
+      ball.className = 'shot-ball'; ball.style.left = '50%'; ball.style.top = '72%';
+      keeper.style.left = '50%'; keeper.style.top = '39%'; striker.style.left = '50%';
+    }, 1050);
+  }
+  function renderRoomState(room) {
+    if (!room || !roomIdentity || !activeRoomMeta) return;
+    const isHost = activeRoomMeta.side === 'host';
+    const mySide = isHost ? 'host' : 'guest', otherSide = isHost ? 'guest' : 'host';
+    const myName = isHost ? room.host_name : room.guest_name, otherName = isHost ? room.guest_name : room.host_name;
+    const myScore = isHost ? room.score_host : room.score_guest, otherScore = isHost ? room.score_guest : room.score_host;
+    const myId = roomIdentity.user.id, otherId = isHost ? room.guest_id : room.host_id;
+    $('#rankPill').textContent = 'FRIENDLY ROOM'; $('#opponentLabel').textContent = 'Opponent';
+    $('#playerNameDisplay').textContent = (myName || 'Guest').toUpperCase(); $('#opponentName').textContent = (otherName || 'OPEN SLOT').toUpperCase();
+    $('#score').textContent = `${myScore} — ${otherScore}`;
+    const historyRows = room.score_history || [];
+    const makeDots = (side) => {
+      const played = historyRows.filter((event) => event.shooter_side === side);
+      return Array.from({ length: Math.max(5, played.length) }, (_, i) => `<i class="dot ${played[i] ? (played[i].scored ? 'scored' : 'miss') : ''}"></i>`).join('');
+    };
+    $('#youDots').innerHTML = makeDots(mySide); $('#oppDots').innerHTML = makeDots(otherSide);
+    const pairRound = Math.floor(room.kick_no / 2) + 1;
+    $('#roundLabel').textContent = room.kick_no < 10 ? `ROUND ${Math.min(5, pairRound)} OF 5` : `SUDDEN DEATH · ${Math.floor((room.kick_no - 10) / 2) + 1}`;
+    $('#timer').hidden = true; $('#kickButton').hidden = true; $('#tipCard').hidden = true; $('#resultPanel').hidden = true;
+    $('#history').replaceChildren(...historyRows.slice(-8).map((event) => {
+      const badge = document.createElement('span'); badge.className = 'round-badge';
+      const shooterName = event.shooter_side === 'host' ? room.host_name : room.guest_name;
+      badge.textContent = `${shooterName}: ${event.scored ? 'GOAL' : 'SAVED'}`; return badge;
+    }));
+    if (room.status === 'completed') {
+      const tied = !room.winner_id, won = room.winner_id === myId;
+      $('#resultEmoji').textContent = tied ? '🤝' : won ? '🏆' : '🧤';
+      $('#resultTitle').textContent = tied ? 'Level after sudden death' : won ? 'Ice cold. You win.' : 'So close.';
+      $('#resultText').textContent = `${room.host_name} ${room.score_host} — ${room.score_guest} ${room.guest_name} · friendly room, not ranked`;
+      $('#resultPanel').hidden = false; $('#choices').hidden = true; $('#rematchButton').hidden = false; $('#rematchButton').textContent = 'Create another room';
+      window.penaltyMindsetOnlineRematch = () => { activeRoomMeta = activeRoomData = null; roomMatchStarted = false; try { localStorage.removeItem('pm-active-room'); } catch {} $('#onlineModal').classList.add('open'); createRoom(); };
+      return;
+    }
+    const shooterSide = room.kick_no % 2 === 0 ? 'host' : 'guest', isShooter = shooterSide === mySide;
+    $('#turnLabel').textContent = isShooter ? 'Your kick' : `${otherName || 'Your opponent'} is shooting`;
+    $('#promptTitle').textContent = isShooter ? 'Pick your corner' : 'Read the striker';
+    $('#promptText').textContent = isShooter ? 'Your opponent is setting their dive.' : 'Where do you think they’ll shoot?';
+    $('#choices').setAttribute('aria-label', isShooter ? 'Choose your shot direction' : 'Choose your dive direction');
+    const submitted = isHost ? room.pending_host : room.pending_guest;
+    $('#choices').hidden = submitted;
+    $('#turnHint').textContent = submitted ? 'Your choice is locked. Waiting for the other player…' : isShooter ? 'Tap a direction to take the shot.' : 'Tap where to dive.';
   }
   async function renderOnlineState(match) {
     if (!match || !user) return;
@@ -298,8 +547,29 @@
     $('#choices').hidden = submitted;
     $('#turnHint').textContent = submitted ? 'Your choice is locked. Waiting for your friend…' : isShooter ? 'Tap a direction to take the shot.' : 'Tap where to dive.';
   }
-  window.penaltyMindsetRenderOnlineTurn = () => { if (activeOnlineMatch) renderOnlineState(activeOnlineMatch); };
+  async function submitRoomChoice(direction) {
+    const room = activeRoomData;
+    if (!room || room.status !== 'playing' || !direction || !roomIdentity || roomSubmitting) return;
+    roomSubmitting = true;
+    const isHost = activeRoomMeta.side === 'host';
+    const side = isHost ? 'host' : 'guest';
+    const shooterSide = room.kick_no % 2 === 0 ? 'host' : 'guest';
+    const role = side === shooterSide ? 'shooter' : 'keeper';
+    if (onlineFieldResetTimer) { clearTimeout(onlineFieldResetTimer); onlineFieldResetTimer = null; }
+    $('#choices').hidden = true; $('#turnHint').textContent = 'Sending your choice…';
+    try {
+      await roomRequest('/rest/v1/penalty_room_moves', {
+        method: 'POST', headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({ room_id: room.id, kick_no: room.kick_no, player_id: roomIdentity.user.id, player_side: side, role, direction })
+      });
+      await refreshActiveRoom();
+      if (activeRoomData?.status === 'playing' && activeRoomData.kick_no === room.kick_no) $('#turnHint').textContent = 'Your choice is locked. Waiting for the other player…';
+    } catch (e) { say('#onlineError', e.message); $('#turnHint').textContent = `Could not send that choice: ${e.message}`; $('#choices').hidden = false; }
+    finally { roomSubmitting = false; }
+  }
+  window.penaltyMindsetRenderOnlineTurn = () => { if (activeRoomData) renderRoomState(activeRoomData); else if (activeOnlineMatch) renderOnlineState(activeOnlineMatch); };
   window.penaltyMindsetSubmitOnlineChoice = async (direction) => {
+    if (activeRoomData) return submitRoomChoice(direction);
     const m = activeOnlineMatch;
     if (!m || m.status !== 'playing' || !direction || !user || onlineSubmitting) return;
     onlineSubmitting = true;
@@ -313,11 +583,21 @@
     } catch (e) { say('#onlineError', e.message); $('#turnHint').textContent = 'Could not send that choice: ' + e.message; $('#choices').hidden = false; }
     finally { onlineSubmitting = false; }
   };
-  $('#friendButton').onclick = () => {
-    if (!user || !profile) { $('#accountModal').classList.add('open'); return; }
-    $('#onlineError').textContent = ''; $('#onlineModal').classList.add('open'); loadOnlineLobby();
-  };
-  $('#friendsButton').addEventListener('click', () => { if (!user || !profile) { $('#accountModal').classList.add('open'); return; } $('#socialModal').classList.remove('open'); $('#onlineModal').classList.add('open'); $('#onlineError').textContent = ''; loadOnlineLobby(); });
+  $('#createRoomButton').addEventListener('click', createRoom);
+  $('#joinRoomButton').addEventListener('click', joinRoom);
+  $('#roomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(); });
+  $('#roomCodeInput').addEventListener('input', () => { const input = $('#roomCodeInput'); input.value = input.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, '').slice(0, 10); });
+  $('#copyRoomButton').addEventListener('click', async () => {
+    if (!activeRoomMeta) return;
+    const link = roomInviteUrl(activeRoomMeta.code);
+    try { await navigator.clipboard.writeText(link); $('#copyRoomButton').textContent = 'Link copied'; }
+    catch { $('#roomShareHelp').textContent = `Copy this link: ${link}`; }
+  });
+  $('#friendButton').onclick = () => { $('#onlineError').textContent = ''; $('#onlineModal').classList.add('open'); loadOnlineLobby(); };
+  $('#friendsButton').addEventListener('click', () => {
+    if (!user || !profile) { $('#onlineModal').classList.add('open'); $('#onlineError').textContent = ''; loadOnlineLobby(); return; }
+    $('#socialModal').classList.remove('open'); $('#onlineModal').classList.add('open'); $('#onlineError').textContent = ''; loadOnlineLobby();
+  });
   $('#localPassButton').addEventListener('click', () => { $('#onlineModal').classList.remove('open'); $('#friendModal').classList.add('open'); });
   $('#accountSignout').addEventListener('click', async () => {
     try { if (session?.access_token) await fetch(`${PROJECT_URL}/auth/v1/logout`, { method: 'POST', headers: { apikey: PUBLIC_KEY, Authorization: `Bearer ${session.access_token}` } }); } catch {}
@@ -360,8 +640,18 @@
   };
   document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => $('#' + b.dataset.close).classList.remove('open')));
   document.querySelectorAll('.modal-backdrop').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m && m.id !== 'profileModal') m.classList.remove('open'); }));
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && user) { if (activeOnlineId) refreshOnlineMatch(); if ($('#onlineModal').classList.contains('open')) loadOnlineLobby(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (activeOnlineId) refreshOnlineMatch(); if (activeRoomMeta) refreshActiveRoom(); if ($('#onlineModal').classList.contains('open')) loadOnlineLobby(); } });
   setAuthMode('signin');
   loadAccount();
+  const roomFromLink = new URLSearchParams(location.search).get('room');
+  if (roomFromLink) { $('#roomCodeInput').value = roomFromLink.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, '').slice(0, 10); $('#onlineModal').classList.add('open'); }
+  try {
+    const savedRoom = JSON.parse(localStorage.getItem('pm-active-room') || 'null');
+    if (savedRoom?.id && savedRoom?.code && savedRoom?.playerId && (!roomFromLink || roomFromLink.toUpperCase() === savedRoom.code)) {
+      activeRoomMeta = savedRoom;
+      if (savedRoom.side === 'host') showRoomShare(savedRoom);
+      startRoomPolling();
+    }
+  } catch {}
 })();
 
