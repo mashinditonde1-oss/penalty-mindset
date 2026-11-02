@@ -17,7 +17,7 @@
   document.head.append(style);
   let session = readSession(), user = null, profile = null, friends = [], authMode = 'signin', savingMatch = false;
   let realtimeClient = null, realtimeChannel = null, activeOnlineId = null, activeOnlineMatch = null, activeOpponent = null, lastRenderedKick = 0, onlineRenderVersion = 0, onlineSubmitting = false;
-  let roomIdentity = null, activeRoomMeta = null, activeRoomData = null, roomPollTimer = null, roomPollBusy = false, lastRoomKick = -1, roomSubmitting = false, roomMatchStarted = false, onlineFieldResetTimer = null;
+  let roomIdentity = null, activeRoomMeta = null, activeRoomData = null, roomPollTimer = null, roomClockTimer = null, roomTimeoutKey = '', roomTimeoutBusy = false, roomPollBusy = false, lastRoomKick = -1, roomSubmitting = false, roomMatchStarted = false, onlineFieldResetTimer = null;
   try { realtimeClient = window.supabase?.createClient(PROJECT_URL, PUBLIC_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }) || null; } catch { realtimeClient = null; }
 
   function readSession() { try { const old = JSON.parse(localStorage.getItem('pm-auth-session') || 'null'); const fragment = new URLSearchParams(location.hash.slice(1)); const access_token = fragment.get('access_token'); const refresh_token = fragment.get('refresh_token'); if (access_token && refresh_token) { const fresh = { access_token, refresh_token, expires_at: Math.floor(Date.now() / 1000) + Number(fragment.get('expires_in') || 3600) }; localStorage.setItem('pm-auth-session', JSON.stringify(fresh)); history.replaceState(null, '', location.pathname + location.search); return fresh; } return old; } catch { return null; } }
@@ -370,12 +370,12 @@
     roomPollTimer = setInterval(refreshActiveRoom, 1400);
     refreshActiveRoom();
   }
-  function stopRoomPolling() { clearInterval(roomPollTimer); roomPollTimer = null; }
+  function stopRoomPolling() { clearInterval(roomPollTimer); clearInterval(roomClockTimer); roomPollTimer = roomClockTimer = null; roomTimeoutKey = ''; }
   async function refreshActiveRoom() {
     if (!activeRoomMeta || roomPollBusy) return;
     roomPollBusy = true;
     try {
-      const rows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,host_name,guest_name,status,kick_no,score_host,score_guest,saves_host,saves_guest,pending_host,pending_guest,score_history,winner_id,updated_at&id=eq.${encodeURIComponent(activeRoomMeta.id)}&limit=1`);
+      const rows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,host_name,guest_name,status,kick_no,score_host,score_guest,saves_host,saves_guest,pending_host,pending_guest,score_history,winner_id,turn_started_at,updated_at&id=eq.${encodeURIComponent(activeRoomMeta.id)}&limit=1`);
       if (!rows?.length) throw new Error('This room is no longer available.');
       const previous = activeRoomData;
       activeRoomData = rows[0];
@@ -480,13 +480,14 @@
     $('#youDots').innerHTML = makeDots(mySide); $('#oppDots').innerHTML = makeDots(otherSide);
     const pairRound = Math.floor(room.kick_no / 2) + 1;
     $('#roundLabel').textContent = room.kick_no < 10 ? `ROUND ${Math.min(5, pairRound)} OF 5` : `SUDDEN DEATH · ${Math.floor((room.kick_no - 10) / 2) + 1}`;
-    $('#timer').hidden = true; $('#kickButton').hidden = true; $('#tipCard').hidden = true; $('#resultPanel').hidden = true;
+    $('#timer').hidden = room.status !== 'playing'; $('#kickButton').hidden = true; $('#tipCard').hidden = true; $('#resultPanel').hidden = true;
     $('#history').replaceChildren(...historyRows.slice(-8).map((event) => {
       const badge = document.createElement('span'); badge.className = 'round-badge';
       const shooterName = event.shooter_side === 'host' ? room.host_name : room.guest_name;
       badge.textContent = `${shooterName}: ${event.scored ? 'GOAL' : 'SAVED'}`; return badge;
     }));
     if (room.status === 'completed') {
+      $('#timer').hidden = true;
       const tied = !room.winner_id, won = room.winner_id === myId;
       $('#resultEmoji').textContent = tied ? '🤝' : won ? '🏆' : '🧤';
       $('#resultTitle').textContent = tied ? 'Level after sudden death' : won ? 'Ice cold. You win.' : 'So close.';
@@ -503,6 +504,25 @@
     const submitted = isHost ? room.pending_host : room.pending_guest;
     $('#choices').hidden = submitted;
     $('#turnHint').textContent = submitted ? 'Your choice is locked. Waiting for the other player…' : isShooter ? 'Tap a direction to take the shot.' : 'Tap where to dive.';
+    startRoomClock(room);
+  }
+  function startRoomClock(room) {
+    const turnKey = `${room.id}:${room.kick_no}`;
+    if (roomTimeoutKey !== turnKey) roomTimeoutKey = '';
+    if (!roomClockTimer) roomClockTimer = setInterval(() => {
+      if (!activeRoomData || activeRoomData.status !== 'playing' || !activeRoomMeta || roomTimeoutBusy) return;
+      const currentKey = `${activeRoomData.id}:${activeRoomData.kick_no}`;
+      const startedAt = Date.parse(activeRoomData.turn_started_at || activeRoomData.updated_at);
+      const remaining = Math.max(0, 10 - Math.floor((Date.now() - startedAt) / 1000));
+      $('#timer').textContent = String(remaining).padStart(2, '0');
+      if (remaining === 0 && roomTimeoutKey !== currentKey) {
+        roomTimeoutKey = currentKey; roomTimeoutBusy = true;
+        $('#turnHint').textContent = 'Time’s up. Resolving the turn…';
+        roomRequest('/rest/v1/rpc/expire_penalty_room_turn', {
+          method: 'POST', body: JSON.stringify({ p_room_id: activeRoomData.id })
+        }).then(refreshActiveRoom).catch((e) => say('#onlineError', e.message)).finally(() => { roomTimeoutBusy = false; });
+      }
+    }, 250);
   }
   async function renderOnlineState(match) {
     if (!match || !user) return;
