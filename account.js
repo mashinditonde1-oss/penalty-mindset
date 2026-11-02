@@ -2,6 +2,13 @@
   'use strict';
   const PROJECT_URL = 'https://obknxomnliwjdpsxcqkc.supabase.co';
   const PUBLIC_KEY = 'sb_publishable_Qe3gk5Wx48j_YhyJypoR8Q_2xmbnCNL';
+  const PRODUCTION_URL = 'https://penalty-mindset.pages.dev/';
+  function signupRedirectUrl() {
+    const localHosts = ['localhost', '127.0.0.1', '[::1]'];
+    return location.origin === 'null' || localHosts.includes(location.hostname)
+      ? PRODUCTION_URL
+      : `${location.origin}/`;
+  }
   const $ = (s) => document.querySelector(s);
   const escape = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const style = document.createElement('style');
@@ -94,7 +101,7 @@
     if (!email || password.length < 8) return say('#accountError', 'Enter your email and a password of at least 8 characters.');
     $('#accountSubmit').disabled = true;
     try {
-      const path = authMode === 'signup' ? '/auth/v1/signup?redirect_to=' + encodeURIComponent(location.href.split('#')[0]) : '/auth/v1/token?grant_type=password';
+      const path = authMode === 'signup' ? '/auth/v1/signup?redirect_to=' + encodeURIComponent(signupRedirectUrl()) : '/auth/v1/token?grant_type=password';
       const r = await fetch(PROJECT_URL + path, { method: 'POST', headers: { apikey: PUBLIC_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.msg || d.message || d.error_description || 'Could not sign in.');
