@@ -376,7 +376,13 @@
     roomPollBusy = true;
     try {
       const rows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,host_name,guest_name,status,left_by,kick_no,score_host,score_guest,saves_host,saves_guest,pending_host,pending_guest,score_history,winner_id,turn_started_at,updated_at&id=eq.${encodeURIComponent(activeRoomMeta.id)}&limit=1`);
-      if (!rows?.length) throw new Error('This room is no longer available.');
+      if (!rows?.length) {
+        activeRoomMeta = activeRoomData = null;
+        try { localStorage.removeItem('pm-active-room'); } catch {}
+        stopRoomPolling();
+        window.penaltyMindsetReturnHome?.('Match cleared. Back to the main screen.');
+        return;
+      }
       const previous = activeRoomData;
       activeRoomData = rows[0];
       if (activeRoomData.status === 'disconnected') {
