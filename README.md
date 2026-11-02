@@ -4,11 +4,11 @@ A static penalty shootout game with email accounts, accepted friends, live head-
 
 ## Deploy to Cloudflare Pages
 
-Create a Pages project from this repository with:
+Connect this repository to Cloudflare Pages with:
 
 - **Production branch:** `main`
-- **Build command:** leave blank
-- **Build output directory:** `/` (the repository root)
+- **Build command:** `exit 0`
+- **Build output directory:** `.` (the repository root)
 
 The app is static. `index.html` and `account.js` must be deployed together.
 
