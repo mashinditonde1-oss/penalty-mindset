@@ -408,7 +408,7 @@
       }
       if (previous && activeRoomData.kick_no > previous.kick_no) {
         const event = activeRoomData.score_history?.[activeRoomData.kick_no - 1];
-        if (event) await animateOnlineKick(event);
+        if (event) { await animateOnlineKick(event); if (activeRoomData.status === 'completed') await new Promise((resolve) => setTimeout(resolve, 1500)); }
       }
       lastRoomKick = activeRoomData.kick_no;
       renderRoomState(activeRoomData);
@@ -468,7 +468,7 @@
       if (activeOnlineMatch.kick_no > lastRenderedKick) {
         const event = activeOnlineMatch.score_history?.[activeOnlineMatch.kick_no - 1];
         lastRenderedKick = activeOnlineMatch.kick_no;
-        if (event) await animateOnlineKick(event);
+        if (event) { await animateOnlineKick(event); if (activeOnlineMatch.status === 'completed') await new Promise((resolve) => setTimeout(resolve, 1500)); }
       }
       renderOnlineState(activeOnlineMatch);
       if (activeOnlineMatch.status === 'playing' || activeOnlineMatch.status === 'completed') $('#onlineModal').classList.remove('open');
@@ -476,27 +476,28 @@
     } catch (e) { say('#onlineError', e.message); }
   }
   function animateOnlineKick(event) {
-    const directionX = (d) => d === 'left' ? '34%' : d === 'right' ? '66%' : '50%';
-    const directionY = (d) => d === 'center' ? '22%' : '15%';
+    const directionX = (d) => d === 'left' ? '37.5%' : d === 'right' ? '62.5%' : '50%';
+    const directionY = (d) => d === 'center' ? '14.1667%' : '15.8333%';
     if (onlineFieldResetTimer) clearTimeout(onlineFieldResetTimer);
-    const ball = $('#shotBall'), keeper = $('#keeper'), striker = $('#striker');
-    ball.className = 'shot-ball'; ball.style.left = '50%'; ball.style.top = '72%';
-    keeper.style.left = '50%'; keeper.style.top = '39%'; striker.style.left = '50%';
-    void ball.offsetWidth; void keeper.offsetWidth; void striker.offsetWidth;
-    ball.className = 'shot-ball fly'; ball.style.left = directionX(event.shot_direction); ball.style.top = directionY(event.shot_direction);
-    keeper.style.left = directionX(event.save_direction); keeper.style.top = '22%';
-    striker.style.left = directionX(event.shot_direction);
+    const ball = $('#shotBall'), keeper = $('#keeper');
+    ball.className = 'shot-ball'; ball.style.left = '50%'; ball.style.top = '73.3333%';
+    keeper.classList.remove('diving'); keeper.style.left = '50%'; keeper.style.top = '21.6667%';
+    $('#striker').style.left = '50%';
+    void ball.offsetWidth; void keeper.offsetWidth;
+    const saved = !event.scored;
+    ball.classList.add('fly'); ball.style.left = saved ? directionX(event.save_direction) : directionX(event.shot_direction);
+    ball.style.top = saved ? '20.3333%' : directionY(event.shot_direction);
+    setTimeout(() => { keeper.classList.add('diving'); keeper.style.left = directionX(event.save_direction); }, 0);
     return new Promise((resolve) => setTimeout(() => {
       $('#callout span').textContent = event.scored ? 'GOAL!' : 'SAVED!'; $('#callout').classList.add('show');
       onlineFieldResetTimer = setTimeout(() => {
         $('#callout').classList.remove('show');
-        ball.className = 'shot-ball'; ball.style.left = '50%'; ball.style.top = '72%';
-        keeper.style.left = '50%'; keeper.style.top = '39%'; striker.style.left = '50%';
-      }, 850);
+        ball.className = 'shot-ball'; ball.style.left = '50%'; ball.style.top = '73.3333%';
+        keeper.classList.remove('diving'); keeper.style.left = '50%'; keeper.style.top = '21.6667%';
+      }, 1500);
       resolve();
-    }, 380));
-  }
-  function deciderPrompt(kickNo, scoreA, scoreB, playerAId, playerBId, myId, isShooter) {
+    }, 800));
+  }  function deciderPrompt(kickNo, scoreA, scoreB, playerAId, playerBId, myId, isShooter) {
     const shooterA = kickNo % 2 === 0, nextKick = kickNo + 1;
     const outcome = (scored) => {
       const a = scoreA + (scored && shooterA ? 1 : 0), b = scoreB + (scored && !shooterA ? 1 : 0);
@@ -529,7 +530,7 @@
     const myId = roomIdentity.user.id, otherId = isHost ? room.guest_id : room.host_id;
     $('#rankPill').textContent = room.is_rematch ? 'HEAD-TO-HEAD' : 'FRIENDLY ROOM'; $('#opponentLabel').textContent = 'Opponent';
     $('#playerNameDisplay').textContent = (myName || 'Guest').toUpperCase(); $('#opponentName').textContent = (otherName || 'OPEN SLOT').toUpperCase();
-    $('#score').textContent = `${myScore} — ${otherScore}`;
+    $('#score').textContent = `${myScore} — ${otherScore}`; $('#playerScore').textContent = myScore; $('#opponentScore').textContent = otherScore;
     const historyRows = room.score_history || [];
     const makeDots = (side) => {
       const played = historyRows.filter((event) => event.shooter_side === side);
@@ -577,6 +578,8 @@
     }
     const shooterSide = room.kick_no % 2 === 0 ? 'host' : 'guest', isShooter = shooterSide === mySide;
     const pressurePrompt = deciderPrompt(room.kick_no, room.score_host, room.score_guest, room.host_id, room.guest_id, myId, isShooter);
+    $('#deciderBadge').textContent = pressurePrompt ? pressurePrompt.replace(/^Decider: /, '').split(' · ')[0].replace('stay alive', 'survive').toUpperCase() : '';
+    $('#deciderBadge').hidden = !pressurePrompt;
     $('#turnLabel').textContent = isShooter ? 'Your kick' : `${otherName || 'Your opponent'} is shooting`;
     $('#promptTitle').textContent = pressurePrompt ? 'Decider penalty' : isShooter ? 'Pick your corner' : 'Read the striker';
     $('#promptText').textContent = pressurePrompt || (isShooter ? 'Your opponent is setting their dive.' : 'Where do you think they’ll shoot?');
@@ -595,7 +598,7 @@
       const currentKey = `${activeRoomData.id}:${activeRoomData.kick_no}`;
       const startedAt = Date.parse(activeRoomData.turn_started_at || activeRoomData.updated_at);
       const remaining = Math.max(0, 10 - Math.floor((Date.now() - startedAt) / 1000));
-      $('#timer').textContent = String(remaining).padStart(2, '0');
+      $('#timer').textContent = `0:${String(remaining).padStart(2, '0')}`;
       if (remaining === 0 && roomTimeoutKey !== currentKey) {
         roomTimeoutKey = currentKey; roomTimeoutBusy = true;
         $('#turnHint').textContent = 'Time’s up. Resolving the turn…';
@@ -612,7 +615,7 @@
     const myId = user.id, otherId = meFirst ? match.invitee_id : match.inviter_id;
     $('#rankPill').textContent = 'ONLINE MATCH'; $('#opponentLabel').textContent = 'Friend';
     $('#opponentName').textContent = (activeOpponent?.display_name || 'FRIEND').toUpperCase(); $('#playerNameDisplay').textContent = profile.display_name.toUpperCase();
-    $('#score').textContent = `${myScore} — ${otherScore}`;
+    $('#score').textContent = `${myScore} — ${otherScore}`; $('#playerScore').textContent = myScore; $('#opponentScore').textContent = otherScore;
     const historyRows = match.score_history || [];
     const makeDots = (id) => {
       const played = historyRows.filter((h) => h.shooter_id === id);
@@ -639,6 +642,8 @@
     }
     const shooterId = match.kick_no % 2 === 0 ? match.inviter_id : match.invitee_id, isShooter = shooterId === myId;
     const pressurePrompt = deciderPrompt(match.kick_no, match.score_inviter, match.score_invitee, match.inviter_id, match.invitee_id, myId, isShooter);
+    $('#deciderBadge').textContent = pressurePrompt ? pressurePrompt.replace(/^Decider: /, '').split(' · ')[0].replace('stay alive', 'survive').toUpperCase() : '';
+    $('#deciderBadge').hidden = !pressurePrompt;
     $('#turnLabel').textContent = isShooter ? 'Your kick' : `${activeOpponent?.display_name || 'Friend'} is shooting`;
     $('#promptTitle').textContent = pressurePrompt ? 'Decider penalty' : isShooter ? 'Pick your corner' : 'Read the striker';
     $('#promptText').textContent = pressurePrompt || (isShooter ? 'Your friend is setting their dive.' : 'Where do you think they’ll shoot?');
