@@ -22,6 +22,22 @@ body.in-match{overflow:hidden;background:var(--ink)}body.in-match .shell{width:1
 @media(min-width:640px){.score-row{height:46px}.dot{width:16px;height:16px}.game-controls{grid-template-columns:1fr}.choices{gap:12px}.choice{height:64px}.choice .arrow{font-size:22px}.choice strong{font-size:19px}}
 @media(max-width:520px){#match.active{padding-left:12px;padding-right:12px;padding-bottom:12px}.game-top{height:52px}.game-brand{font-size:17px}.game-left-tools{gap:4px}.game-left-tools .icon-btn,.game-left-tools .quiet{padding:5px 8px}.field-stage{margin-top:8px}.game-controls{margin-top:8px}.choices{gap:8px}.choice{height:clamp(64px,14vh,92px);border-radius:12px}.choice strong{font-size:clamp(16px,4.6vw,20px)}.choice .arrow{font-size:21px}.scoreboard-head{height:36px}.score-row{height:42px;grid-template-columns:4px minmax(52px,1fr) auto auto 22px;gap:5px}.score-name strong{font-size:13px}.dot{width:12px;height:12px}.dots{gap:4px}.team-score{font-size:18px}}
 @media(max-height:650px){.field-stage{margin-top:6px}.game-controls{margin-top:6px}.choice{height:60px}.score-row{height:38px}.scoreboard-head{height:34px}}
+</style>
+<style id="match-screenshot-fixes">
+#match.active{width:100%;box-sizing:border-box}
+#match .game-top{position:relative;display:flex;justify-content:space-between;gap:12px;width:min(100%,1024px);min-width:0}
+#match .game-left-tools{flex:none}
+#match .game-brand{position:absolute;left:50%;transform:translateX(-50%);max-width:48%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
+#match #rankPill{flex:none;min-width:0;max-width:38vw;overflow:hidden;text-overflow:ellipsis;border-color:var(--line);background:var(--panel);color:var(--lime);letter-spacing:.08em}
+#match .score-row{display:flex;gap:8px;padding:0 12px 0 14px}
+#match .score-name{flex:1 1 0;width:0;min-width:0}
+#match .you-tag{flex:none;margin-inline:2px}
+#match .dots{flex:none;margin-left:auto}
+#match .team-score{width:26px;flex:none;text-align:right}
+#match .callout{inset:41% 0 auto;width:100%;height:18%;min-height:0;padding:0 clamp(16px,4vw,42px);box-sizing:border-box;display:none;align-items:center;justify-content:center;transform:none;text-align:center}
+#match .callout.show{display:flex}
+#match .callout span{display:block;width:100%;opacity:1;transform:none;text-align:center;white-space:nowrap;line-height:1.1}
+@media(max-width:520px){#match .game-top{gap:6px}#match .game-brand{max-width:44%;font-size:16px}#match .score-row{gap:5px;padding-right:9px;padding-left:12px}#match .team-score{width:22px}}
 </style></head>
 <body>
 <div class="shell">
