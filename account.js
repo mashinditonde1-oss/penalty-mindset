@@ -509,7 +509,7 @@
       return { complete, winner: a > b ? playerAId : b > a ? playerBId : null };
     };
     const goal = outcome(true), saved = outcome(false), opponentId = myId === playerAId ? playerBId : playerAId;
-    if (!goal.complete && !saved.complete) return '';
+    if (!goal.complete && !saved.complete) return kickNo >= 10 ? (isShooter ? 'Decider: score to put pressure.' : 'Decider: save to keep going.') : '';
     if (isShooter) {
       if (goal.complete && goal.winner === myId) return saved.complete ? 'Decider: score to win.' : 'Decider: score to win · a save keeps it going.';
       if (saved.complete && saved.winner === opponentId) return goal.complete ? 'Decider: score to win.' : 'Decider: score to keep going · a save sends them through.';
