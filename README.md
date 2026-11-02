@@ -21,7 +21,7 @@ The required database migrations are in `supabase/migrations/`. They were applie
 1. `20261102_penalty_mindset.sql`
 2. `20261102_penalty_online_matches.sql`
 
-In Supabase Auth URL settings, set the deployed site as the Site URL and add the deployed address as an allowed redirect URL. Email confirmation returns players to the page where they started signup.
+In Supabase **Authentication → URL Configuration**, set the Site URL to `https://penalty-mindset.pages.dev` and add `https://penalty-mindset.pages.dev/**` to Redirect URLs. Signup from a local development server redirects to the live site so the confirmation link does not point at the user's own device. Supabase requires the redirect destination to be allowlisted; its Site URL is the fallback when no valid `redirect_to` is supplied.
 
 ## How online play works
 
