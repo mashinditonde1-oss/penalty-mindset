@@ -375,7 +375,7 @@
     if (!activeRoomMeta || roomPollBusy) return;
     roomPollBusy = true;
     try {
-      const rows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,host_name,guest_name,status,left_by,kick_no,score_host,score_guest,saves_host,saves_guest,pending_host,pending_guest,score_history,winner_id,turn_started_at,updated_at&id=eq.${encodeURIComponent(activeRoomMeta.id)}&limit=1`);
+      const rows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,host_name,guest_name,status,left_by,kick_no,score_host,score_guest,saves_host,saves_guest,pending_host,pending_guest,score_history,winner_id,turn_started_at,rematch_host,rematch_guest,rematch_room_id,is_rematch,updated_at&id=eq.${encodeURIComponent(activeRoomMeta.id)}&limit=1`);
       if (!rows?.length) {
         activeRoomMeta = activeRoomData = null;
         try { localStorage.removeItem('pm-active-room'); } catch {}
@@ -393,6 +393,10 @@
         window.penaltyMindsetReturnHome?.(opponentLeft ? 'Opponent disconnected. Back to the main screen.' : 'Match closed. Back to the main screen.');
         return;
       }
+      if (activeRoomData.rematch_room_id) {
+        await switchToRematch(activeRoomData.rematch_room_id);
+        return;
+      }
       if (activeRoomData.status === 'waiting') {
         showRoomShare(activeRoomMeta);
         $('#roomShareHelp').textContent = `Share this link: ${roomInviteUrl(activeRoomMeta.code)} · Waiting for someone to join…`;
@@ -408,9 +412,19 @@
       }
       lastRoomKick = activeRoomData.kick_no;
       renderRoomState(activeRoomData);
-      if (activeRoomData.status === 'completed') stopRoomPolling();
     } catch (e) { say('#onlineError', e.message); }
     finally { roomPollBusy = false; }
+  }
+  async function switchToRematch(roomId) {
+    if (!activeRoomMeta || !roomIdentity) return;
+    const rows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,host_name,guest_name,status,left_by,kick_no,score_host,score_guest,saves_host,saves_guest,pending_host,pending_guest,score_history,winner_id,turn_started_at,rematch_host,rematch_guest,rematch_room_id,is_rematch,updated_at&id=eq.${encodeURIComponent(roomId)}&limit=1`);
+    if (!rows?.length) return;
+    const next = rows[0];
+    activeRoomMeta = { id: next.id, code: next.code, side: next.host_id === roomIdentity.user.id ? 'host' : 'guest', playerId: roomIdentity.user.id };
+    saveRoomMeta(activeRoomMeta);
+    activeRoomData = next; roomMatchStarted = true; lastRoomKick = 0; roomTimeoutKey = '';
+    window.penaltyMindsetBeginOnline?.();
+    renderRoomState(next);
   }
   async function createOnlineInvite(friendId) {
     if (!user || !profile) { $('#accountModal').classList.add('open'); return; }
@@ -483,7 +497,7 @@
     const myName = isHost ? room.host_name : room.guest_name, otherName = isHost ? room.guest_name : room.host_name;
     const myScore = isHost ? room.score_host : room.score_guest, otherScore = isHost ? room.score_guest : room.score_host;
     const myId = roomIdentity.user.id, otherId = isHost ? room.guest_id : room.host_id;
-    $('#rankPill').textContent = 'FRIENDLY ROOM'; $('#opponentLabel').textContent = 'Opponent';
+    $('#rankPill').textContent = room.is_rematch ? 'HEAD-TO-HEAD' : 'FRIENDLY ROOM'; $('#opponentLabel').textContent = 'Opponent';
     $('#playerNameDisplay').textContent = (myName || 'Guest').toUpperCase(); $('#opponentName').textContent = (otherName || 'OPEN SLOT').toUpperCase();
     $('#score').textContent = `${myScore} — ${otherScore}`;
     const historyRows = room.score_history || [];
@@ -506,8 +520,19 @@
       $('#resultEmoji').textContent = tied ? '🤝' : won ? '🏆' : '🧤';
       $('#resultTitle').textContent = tied ? 'Level after sudden death' : won ? 'Ice cold. You win.' : 'So close.';
       $('#resultText').textContent = `${room.host_name} ${room.score_host} — ${room.score_guest} ${room.guest_name} · friendly room, not ranked`;
-      $('#resultPanel').hidden = false; $('#choices').hidden = true; $('#rematchButton').hidden = false; $('#rematchButton').textContent = 'Create another room';
-      window.penaltyMindsetOnlineRematch = () => { activeRoomMeta = activeRoomData = null; roomMatchStarted = false; try { localStorage.removeItem('pm-active-room'); } catch {} $('#onlineModal').classList.add('open'); createRoom(); };
+      const myReady = isHost ? room.rematch_host : room.rematch_guest;
+      const opponentReady = isHost ? room.rematch_guest : room.rematch_host;
+      $('#resultPanel').hidden = false; $('#choices').hidden = true; $('#rematchButton').hidden = false;
+      $('#rematchButton').disabled = Boolean(myReady);
+      $('#rematchButton').textContent = myReady ? 'Waiting for opponent…' : opponentReady ? 'Opponent wants a rematch · Tap to accept' : 'Rematch';
+      window.penaltyMindsetOnlineRematch = async () => {
+        if (myReady) return;
+        $('#rematchButton').disabled = true; $('#rematchButton').textContent = 'Waiting for opponent…';
+        try {
+          await roomRequest('/rest/v1/rpc/request_penalty_room_rematch', { method: 'POST', body: JSON.stringify({ p_room_id: room.id }) });
+          await refreshActiveRoom();
+        } catch (e) { $('#rematchButton').disabled = false; $('#rematchButton').textContent = 'Rematch'; say('#onlineError', e.message); }
+      };
       return;
     }
     const shooterSide = room.kick_no % 2 === 0 ? 'host' : 'guest', isShooter = shooterSide === mySide;
