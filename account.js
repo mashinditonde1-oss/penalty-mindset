@@ -580,6 +580,8 @@
     const pressurePrompt = deciderPrompt(room.kick_no, room.score_host, room.score_guest, room.host_id, room.guest_id, myId, isShooter);
     $('#deciderBadge').textContent = pressurePrompt ? pressurePrompt.replace(/^Decider: /, '').split(' · ')[0].replace('stay alive', 'survive').toUpperCase() : '';
     $('#deciderBadge').hidden = !pressurePrompt;
+    $('#pitch').classList.toggle('score-alert', /^Decider: score/i.test(pressurePrompt));
+    $('#pitch').classList.toggle('save-alert', /^Decider: save/i.test(pressurePrompt));
     $('#turnLabel').textContent = isShooter ? 'Your kick' : `${otherName || 'Your opponent'} is shooting`;
     $('#promptTitle').textContent = pressurePrompt ? 'Decider penalty' : isShooter ? 'Pick your corner' : 'Read the striker';
     $('#promptText').textContent = pressurePrompt || (isShooter ? 'Your opponent is setting their dive.' : 'Where do you think they’ll shoot?');
@@ -644,6 +646,8 @@
     const pressurePrompt = deciderPrompt(match.kick_no, match.score_inviter, match.score_invitee, match.inviter_id, match.invitee_id, myId, isShooter);
     $('#deciderBadge').textContent = pressurePrompt ? pressurePrompt.replace(/^Decider: /, '').split(' · ')[0].replace('stay alive', 'survive').toUpperCase() : '';
     $('#deciderBadge').hidden = !pressurePrompt;
+    $('#pitch').classList.toggle('score-alert', /^Decider: score/i.test(pressurePrompt));
+    $('#pitch').classList.toggle('save-alert', /^Decider: save/i.test(pressurePrompt));
     $('#turnLabel').textContent = isShooter ? 'Your kick' : `${activeOpponent?.display_name || 'Friend'} is shooting`;
     $('#promptTitle').textContent = pressurePrompt ? 'Decider penalty' : isShooter ? 'Pick your corner' : 'Read the striker';
     $('#promptText').textContent = pressurePrompt || (isShooter ? 'Your friend is setting their dive.' : 'Where do you think they’ll shoot?');
@@ -778,4 +782,3 @@
     }
   } catch {}
 })();
-
