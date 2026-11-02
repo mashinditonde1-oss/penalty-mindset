@@ -367,7 +367,7 @@
   }
   function startRoomPolling() {
     clearInterval(roomPollTimer);
-    roomPollTimer = setInterval(refreshActiveRoom, 1400);
+    roomPollTimer = setInterval(refreshActiveRoom, 800);
     refreshActiveRoom();
   }
   function stopRoomPolling() { clearInterval(roomPollTimer); clearInterval(roomClockTimer); roomPollTimer = roomClockTimer = null; roomTimeoutKey = ''; }
@@ -375,10 +375,18 @@
     if (!activeRoomMeta || roomPollBusy) return;
     roomPollBusy = true;
     try {
-      const rows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,host_name,guest_name,status,kick_no,score_host,score_guest,saves_host,saves_guest,pending_host,pending_guest,score_history,winner_id,turn_started_at,updated_at&id=eq.${encodeURIComponent(activeRoomMeta.id)}&limit=1`);
+      const rows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,host_name,guest_name,status,left_by,kick_no,score_host,score_guest,saves_host,saves_guest,pending_host,pending_guest,score_history,winner_id,turn_started_at,updated_at&id=eq.${encodeURIComponent(activeRoomMeta.id)}&limit=1`);
       if (!rows?.length) throw new Error('This room is no longer available.');
       const previous = activeRoomData;
       activeRoomData = rows[0];
+      if (activeRoomData.status === 'disconnected') {
+        const opponentLeft = activeRoomData.left_by && activeRoomData.left_by !== roomIdentity?.user.id;
+        activeRoomMeta = activeRoomData = null;
+        try { localStorage.removeItem('pm-active-room'); } catch {}
+        stopRoomPolling();
+        window.penaltyMindsetReturnHome?.(opponentLeft ? 'Opponent disconnected. Back to the main screen.' : 'Match closed. Back to the main screen.');
+        return;
+      }
       if (activeRoomData.status === 'waiting') {
         showRoomShare(activeRoomMeta);
         $('#roomShareHelp').textContent = `Share this link: ${roomInviteUrl(activeRoomMeta.code)} · Waiting for someone to join…`;
@@ -587,6 +595,22 @@
     } catch (e) { say('#onlineError', e.message); $('#turnHint').textContent = `Could not send that choice: ${e.message}`; $('#choices').hidden = false; }
     finally { roomSubmitting = false; }
   }
+  window.penaltyMindsetLeaveOnlineRoom = async () => {
+    if (!activeRoomMeta) return false;
+    const roomId = activeRoomMeta.id;
+    try {
+      await roomRequest('/rest/v1/rpc/leave_penalty_room', {
+        method: 'POST', body: JSON.stringify({ p_room_id: roomId })
+      });
+      activeRoomMeta = activeRoomData = null;
+      try { localStorage.removeItem('pm-active-room'); } catch {}
+      stopRoomPolling();
+      return true;
+    } catch (e) {
+      say('#onlineError', e.message);
+      return false;
+    }
+  };
   window.penaltyMindsetRenderOnlineTurn = () => { if (activeRoomData) renderRoomState(activeRoomData); else if (activeOnlineMatch) renderOnlineState(activeOnlineMatch); };
   window.penaltyMindsetSubmitOnlineChoice = async (direction) => {
     if (activeRoomData) return submitRoomChoice(direction);
