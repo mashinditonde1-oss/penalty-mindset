@@ -522,16 +522,26 @@
       $('#resultText').textContent = `${room.host_name} ${room.score_host} — ${room.score_guest} ${room.guest_name} · friendly room, not ranked`;
       const myReady = isHost ? room.rematch_host : room.rematch_guest;
       const opponentReady = isHost ? room.rematch_guest : room.rematch_host;
+      const rematchButton = $('#rematchButton');
       $('#resultPanel').hidden = false; $('#choices').hidden = true; $('#rematchButton').hidden = false;
-      $('#rematchButton').disabled = Boolean(myReady);
-      $('#rematchButton').textContent = myReady ? 'Waiting for opponent…' : opponentReady ? 'Opponent wants a rematch · Tap to accept' : 'Rematch';
+      rematchButton.disabled = Boolean(myReady);
+      rematchButton.classList.toggle('btn-secondary', Boolean(myReady));
+      rematchButton.classList.toggle('btn-primary', !myReady);
+      rematchButton.setAttribute('aria-pressed', String(Boolean(myReady)));
+      rematchButton.textContent = myReady ? 'Rematch requested · Waiting…' : opponentReady ? 'Opponent wants a rematch · Tap to accept' : 'Rematch';
       window.penaltyMindsetOnlineRematch = async () => {
         if (myReady) return;
-        $('#rematchButton').disabled = true; $('#rematchButton').textContent = 'Waiting for opponent…';
+        rematchButton.disabled = true;
+        rematchButton.classList.remove('btn-primary'); rematchButton.classList.add('btn-secondary');
+        rematchButton.setAttribute('aria-pressed', 'true');
+        rematchButton.textContent = 'Rematch requested · Waiting…';
         try {
           await roomRequest('/rest/v1/rpc/request_penalty_room_rematch', { method: 'POST', body: JSON.stringify({ p_room_id: room.id }) });
           await refreshActiveRoom();
-        } catch (e) { $('#rematchButton').disabled = false; $('#rematchButton').textContent = 'Rematch'; say('#onlineError', e.message); }
+        } catch (e) {
+          rematchButton.disabled = false; rematchButton.classList.remove('btn-secondary'); rematchButton.classList.add('btn-primary');
+          rematchButton.setAttribute('aria-pressed', 'false'); rematchButton.textContent = 'Rematch'; say('#onlineError', e.message);
+        }
       };
       return;
     }
@@ -540,6 +550,7 @@
     $('#promptTitle').textContent = isShooter ? 'Pick your corner' : 'Read the striker';
     $('#promptText').textContent = isShooter ? 'Your opponent is setting their dive.' : 'Where do you think they’ll shoot?';
     $('#choices').setAttribute('aria-label', isShooter ? 'Choose your shot direction' : 'Choose your dive direction');
+    window.penaltyMindsetSetChoiceRole?.(isShooter ? 'shooter' : 'keeper');
     const submitted = isHost ? room.pending_host : room.pending_guest;
     $('#choices').hidden = submitted;
     $('#turnHint').textContent = submitted ? 'Your choice is locked. Waiting for the other player…' : isShooter ? 'Tap a direction to take the shot.' : 'Tap where to dive.';
@@ -600,6 +611,7 @@
     $('#promptTitle').textContent = isShooter ? 'Pick your corner' : 'Read the striker';
     $('#promptText').textContent = isShooter ? 'Your friend is setting their dive.' : 'Where do you think they’ll shoot?';
     $('#choices').setAttribute('aria-label', isShooter ? 'Choose your shot direction' : 'Choose your dive direction');
+    window.penaltyMindsetSetChoiceRole?.(isShooter ? 'shooter' : 'keeper');
     const ownMoves = await rest('penalty_online_moves', `select=kick_no&match_id=eq.${match.id}&kick_no=eq.${match.kick_no}&player_id=eq.${myId}&limit=1`);
     if (version !== onlineRenderVersion) return;
     const submitted = ownMoves.length > 0;
