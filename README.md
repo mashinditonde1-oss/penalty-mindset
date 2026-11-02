@@ -1,6 +1,6 @@
 # Penalty Mindset
 
-A static penalty shootout game with email accounts, accepted friends, live head-to-head matches, and a verified online leaderboard.
+A static penalty shootout game with guest rooms, email accounts, accepted friends, live head-to-head matches, and a verified online leaderboard.
 
 ## Deploy to Cloudflare Pages
 
@@ -14,17 +14,20 @@ The app is static. `index.html` and `account.js` must be deployed together.
 
 ## Supabase setup
 
-The game is already connected to the Penalty Mindset Supabase project using its public publishable key. Never put a Supabase service-role key in this repository or in browser code.
+The game is connected to the Penalty Mindset Supabase project using its public publishable key. Never put a Supabase service-role key in this repository or in browser code.
 
-The required database migrations are in `supabase/migrations/`. They were applied to the connected project. For a fresh Supabase project, run these migrations in order:
+The required database migrations are in `supabase/migrations/`. They are applied to the connected project. For a fresh Supabase project, run these migrations in order:
 
 1. `20261102_penalty_mindset.sql`
 2. `20261102_penalty_online_matches.sql`
+3. `20261103_penalty_rooms.sql`
 
-In Supabase **Authentication → URL Configuration**, set the Site URL to `https://penalty-mindset.pages.dev` and add `https://penalty-mindset.pages.dev/**` to Redirect URLs. Signup from a local development server redirects to the live site so the confirmation link does not point at the user's own device. Supabase requires the redirect destination to be allowlisted; its Site URL is the fallback when no valid `redirect_to` is supplied.
+In Supabase **Authentication → URL Configuration**, set the Site URL to `https://penalty-mindset.pages.dev` and add `https://penalty-mindset.pages.dev/**` to Redirect URLs. Signup from a local development server redirects to the live site so the confirmation link does not point at the user's own device.
+
+Guest rooms use Supabase anonymous sign-ins so players can create and join a room without an email account. Enable **Allow anonymous sign-ins** under **Authentication → Sign In / Providers**. The guest session is temporary and is not added to the ranked leaderboard.
 
 ## How online play works
 
-Players sign in, accept each other as friends, and send or accept a challenge from **Play online**. Both choose their shot or dive on their own device. Supabase resolves each kick, handles sudden death, and records verified match results for the online leaderboard. Players can rejoin an active match after reconnecting.
+Players can create a shareable room or join one with a 10-character code. Both players choose their shot or dive on their own device. Supabase resolves each kick and handles sudden death. Room games are friendly and not ranked. Signed-in players can also accept each other as friends, send a challenge, and submit verified results to the online leaderboard.
 
 The game is just for fun; it does not use real money.
