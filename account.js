@@ -14,10 +14,12 @@
   const style = document.createElement('style');
   style.textContent = '.account-error{font-size:12px;color:#ff9b91;min-height:18px;margin:5px 0}.account-switch,.account-signout{width:100%;margin-top:12px}.friend-list{display:grid;gap:7px;margin-top:18px;max-height:260px;overflow:auto}.friend-entry{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid #ffffff12;padding:11px 0}.friend-entry strong{font-size:13px}.friend-entry small{display:block;color:#9bb0b8;font-size:11px}.friend-entry button{font-size:11px;padding:7px 10px}.account-tabs{display:flex;gap:7px;margin:8px 0 12px}.account-tabs button{flex:1}.rank-summary{color:#9bb0b8;font-size:12px;margin:5px 0 12px}.online-section-title{font:700 20px var(--display);text-transform:uppercase;letter-spacing:.04em;margin:18px 0 0}.online-choice{min-width:86px}.online-wait{color:#d6f36a;font-weight:700}.live-badge{display:inline-flex;gap:7px;align-items:center;color:#d6f36a;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}.live-badge:before{content:"";width:7px;height:7px;border-radius:50%;background:#d6f36a;box-shadow:0 0 10px #d6f36a}';
   style.textContent += '.modal{max-height:90vh;overflow:auto}.room-panel{border:1px solid #ffffff16;background:#ffffff06;border-radius:14px;padding:13px;margin-top:10px}.room-panel>.btn{width:100%;margin-top:10px}.room-panel .field{margin:12px 0 0}.room-share{display:grid;gap:8px;border-top:1px solid #ffffff18;margin-top:14px;padding-top:13px}.room-share strong{font:800 30px var(--display);letter-spacing:.12em;color:var(--lime);overflow-wrap:anywhere}.room-share small{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.room-share[hidden]{display:none}';
+  style.textContent += '.tournament-panel{margin:12px 0;padding:14px;border:1px solid #ffffff20;border-radius:14px;background:#ffffff06}.tournament-panel h3{margin:0;font:700 20px var(--display);text-transform:uppercase}.tournament-panel p{color:var(--muted);font-size:12px;margin:5px 0 10px}.tournament-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.tournament-actions .btn{padding:10px 8px;font-size:12px}.tournament-panel input{width:100%;background:#08141b;border:1px solid #29404d;border-radius:10px;padding:11px;color:var(--white);margin:8px 0}.tournament-share{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;padding:10px;border-top:1px solid #ffffff16;color:var(--muted);font-size:11px}.tournament-share strong{font:800 20px var(--display);letter-spacing:.12em;color:var(--lime)}.tournament-share[hidden],.tournament-lobby[hidden]{display:none}.tournament-lobby{border-top:1px solid #ffffff16;margin-top:10px;padding-top:10px}.tournament-list{display:grid;gap:5px;margin-top:8px}.tournament-entry{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid #ffffff0d;font-size:12px}.tournament-entry small{color:var(--muted)}.tournament-entry button{padding:7px 9px;font-size:11px;white-space:nowrap}.tournament-status{font-size:11px;color:var(--lime);font-weight:700}.tournament-lobby .btn{width:100%;margin-top:9px}';
   document.head.append(style);
   let session = readSession(), user = null, profile = null, friends = [], authMode = 'signin', savingMatch = false;
   let realtimeClient = null, realtimeChannel = null, activeOnlineId = null, activeOnlineMatch = null, activeOpponent = null, lastRenderedKick = 0, onlineRenderVersion = 0, onlineSubmitting = false;
   let roomIdentity = null, activeRoomMeta = null, activeRoomData = null, roomPollTimer = null, roomClockTimer = null, roomTimeoutKey = '', roomTimeoutBusy = false, roomClockFallbackKey = '', roomClockFallbackStart = 0, roomPollBusy = false, lastRoomKick = -1, roomSubmitting = false, roomMatchStarted = false, onlineFieldResetTimer = null;
+  let activeTournamentMeta = null, tournamentPollTimer = null, tournamentPollBusy = false;
   try { realtimeClient = window.supabase?.createClient(PROJECT_URL, PUBLIC_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }) || null; } catch { realtimeClient = null; }
 
   function readSession() { try { const old = JSON.parse(localStorage.getItem('pm-auth-session') || 'null'); const fragment = new URLSearchParams(location.hash.slice(1)); const access_token = fragment.get('access_token'); const refresh_token = fragment.get('refresh_token'); if (access_token && refresh_token) { const fresh = { access_token, refresh_token, expires_at: Math.floor(Date.now() / 1000) + Number(fragment.get('expires_in') || 3600) }; localStorage.setItem('pm-auth-session', JSON.stringify(fresh)); history.replaceState(null, '', location.pathname + location.search); return fresh; } return old; } catch { return null; } }
@@ -372,6 +374,146 @@
     } catch (e) { say('#onlineError', e.message); }
     finally { button.disabled = false; }
   }
+  function tournamentInviteUrl(code) {
+    const url = new URL(location.pathname, location.origin);
+    url.searchParams.set('tournament', code);
+    return url.href;
+  }
+  function saveTournamentMeta(meta) {
+    activeTournamentMeta = meta;
+    try { localStorage.setItem('pm-active-tournament', JSON.stringify(meta)); } catch {}
+  }
+  function installTournamentUi() {
+    if ($('#tournamentPanel')) return;
+    const panel = document.createElement('section');
+    panel.className = 'tournament-panel'; panel.id = 'tournamentPanel';
+    panel.innerHTML = '<h3>Online tournament</h3><p>3–8 players · everyone plays each opponent · standard timed shootouts</p><div class="tournament-actions"><button class="btn btn-primary" id="createTournamentButton">Create tournament</button><button class="btn btn-secondary" id="joinTournamentButton">Join tournament</button></div><input id="tournamentCodeInput" maxlength="10" autocapitalize="characters" autocomplete="off" placeholder="Tournament code"><div class="tournament-share" id="tournamentShare" hidden><span>Share this code<br><strong id="tournamentCodeValue"></strong></span><button class="quiet" id="copyTournamentButton">Copy link</button></div><div class="tournament-lobby" id="tournamentLobby" hidden></div>';
+    $('#onlineInvites').parentElement.insertBefore(panel, $('#onlineInvites').previousElementSibling);
+    $('#createTournamentButton').addEventListener('click', createTournament);
+    $('#joinTournamentButton').addEventListener('click', joinTournament);
+    $('#tournamentCodeInput').addEventListener('input', (event) => { event.currentTarget.value = event.currentTarget.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, '').slice(0, 10); });
+    $('#tournamentCodeInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') joinTournament(); });
+    $('#copyTournamentButton').addEventListener('click', async () => {
+      if (!activeTournamentMeta) return;
+      const link = tournamentInviteUrl(activeTournamentMeta.code);
+      try { await navigator.clipboard.writeText(link); $('#copyTournamentButton').textContent = 'Link copied'; }
+      catch { $('#tournamentCodeValue').textContent = `${activeTournamentMeta.code} · ${link}`; }
+    });
+    $('#tournamentLobby').addEventListener('click', async (event) => {
+      const start = event.target.closest('#startTournamentButton');
+      if (start) { await startTournament(); return; }
+      const fixture = event.target.closest('[data-tournament-match]');
+      if (fixture) await openTournamentMatch(fixture.dataset.tournamentMatch);
+    });
+  }
+  async function createTournament() {
+    const button = $('#createTournamentButton'); button.disabled = true;
+    try {
+      const identity = await getRoomIdentity();
+      let lastError;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const id = crypto.randomUUID(), code = newRoomCode();
+        try {
+          await roomRequest('/rest/v1/rpc/create_penalty_tournament', { method: 'POST', body: JSON.stringify({ p_id: id, p_code: code, p_display_name: roomDisplayName() }) });
+          saveTournamentMeta({ id, code, playerId: identity.user.id });
+          $('#tournamentCodeInput').value = code; startTournamentPolling(); await refreshTournament(); return;
+        } catch (error) { lastError = error; if (error.status !== 409) throw error; }
+      }
+      throw lastError || new Error('Could not create the tournament. Try again.');
+    } catch (error) { say('#onlineError', error.message); }
+    finally { button.disabled = false; }
+  }
+  async function joinTournament() {
+    const button = $('#joinTournamentButton'), code = $('#tournamentCodeInput').value.trim().toUpperCase();
+    if (!/^[A-HJ-NP-Z2-9]{10}$/.test(code)) return say('#onlineError', 'Enter the 10-character tournament code.');
+    button.disabled = true;
+    try {
+      const identity = await getRoomIdentity();
+      const id = await roomRequest('/rest/v1/rpc/join_penalty_tournament', { method: 'POST', body: JSON.stringify({ p_code: code, p_display_name: roomDisplayName() }) });
+      saveTournamentMeta({ id: String(id).replaceAll('"', ''), code, playerId: identity.user.id });
+      startTournamentPolling(); await refreshTournament(); say('#onlineError', 'Joined tournament. Stay in the lobby until the host starts it.');
+    } catch (error) { say('#onlineError', error.message); }
+    finally { button.disabled = false; }
+  }
+  function startTournamentPolling() {
+    clearInterval(tournamentPollTimer);
+    tournamentPollTimer = setInterval(refreshTournament, 2500);
+    refreshTournament();
+  }
+  async function refreshTournament() {
+    if (!activeTournamentMeta || tournamentPollBusy) return;
+    tournamentPollBusy = true;
+    try {
+      const id = encodeURIComponent(activeTournamentMeta.id);
+      const [tournaments, players, matches] = await Promise.all([
+        roomRequest(`/rest/v1/penalty_tournaments?select=id,code,host_id,host_name,status,winner_id&id=eq.${id}&limit=1`),
+        roomRequest(`/rest/v1/penalty_tournament_players?select=player_id,display_name,wins,draws,losses,goals_for,goals_against,joined_at&tournament_id=eq.${id}&order=joined_at.asc`),
+        roomRequest(`/rest/v1/penalty_tournament_matches?select=id,player_a_id,player_b_id,room_id,room_code,status,winner_id,score_a,score_b& tournament_id=eq.${id}&order=created_at.asc`.replace('& ', '&'))
+      ]);
+      if (!tournaments.length) throw new Error('Tournament not found. Rejoin with its code.');
+      renderTournament(tournaments[0], players, matches, activeTournamentMeta.playerId);
+      if (tournaments[0].status === 'completed') clearInterval(tournamentPollTimer);
+    } catch (error) { if ($('#onlineModal').classList.contains('open')) say('#onlineError', error.message); }
+    finally { tournamentPollBusy = false; }
+  }
+  function renderTournament(tournament, players, matches, playerId) {
+    const lobby = $('#tournamentLobby');
+    $('#tournamentShare').hidden = false; $('#tournamentCodeValue').textContent = tournament.code;
+    lobby.hidden = false;
+    const host = tournament.host_id === playerId;
+    const standings = [...players].sort((a, b) => (b.wins * 3 + b.draws) - (a.wins * 3 + a.draws) || b.wins - a.wins || (b.goals_for - b.goals_against) - (a.goals_for - a.goals_against) || a.joined_at.localeCompare(b.joined_at));
+    const statusText = tournament.status === 'waiting' ? 'Waiting for the host to start' : tournament.status === 'completed' ? `Champion: ${players.find((p) => p.player_id === tournament.winner_id)?.display_name || 'Tournament complete'}` : 'Round robin in progress';
+    const roster = standings.map((p, i) => `<div class="tournament-entry"><span>${i + 1}. ${escape(p.display_name)} <small>${p.wins}W · ${p.draws}D · ${p.losses}L</small></span><strong>${p.wins * 3 + p.draws} pts</strong></div>`).join('');
+    const fixtureRows = matches.map((m) => {
+      const a = players.find((p) => p.player_id === m.player_a_id)?.display_name || 'Player';
+      const b = players.find((p) => p.player_id === m.player_b_id)?.display_name || 'Player';
+      const involved = [m.player_a_id, m.player_b_id].includes(playerId);
+      const score = m.status === 'completed' ? `${m.score_a}–${m.score_b}` : m.status === 'playing' ? 'In progress' : m.status === 'waiting' ? 'Room ready' : 'Ready';
+      const action = tournament.status === 'playing' && involved && m.status !== 'completed'
+        ? `<button class="btn btn-secondary" data-tournament-match="${m.id}">${m.status === 'pending' ? 'Create match room' : m.status === 'waiting' ? 'Join / open match' : 'Reopen match'}</button>` : '';
+      return `<div class="tournament-entry"><span>${escape(a)} vs ${escape(b)} <small>${score}</small></span>${action}</div>`;
+    }).join('');
+    lobby.innerHTML = `<div class="tournament-status">${escape(statusText)}</div><h4>Standings · ${players.length}/8 players</h4><div class="tournament-list">${roster}</div>${tournament.status === 'waiting' && host ? `<button class="btn btn-primary" id="startTournamentButton" ${players.length < 3 ? 'disabled' : ''}>${players.length < 3 ? 'Need 3 players to start' : 'Start tournament'}</button>` : ''}${tournament.status !== 'waiting' ? `<h4>Fixtures · ${matches.filter((m) => m.status === 'completed').length}/${matches.length} complete</h4><div class="tournament-list">${fixtureRows}</div>` : ''}`;
+  }
+  async function startTournament() {
+    const button = $('#startTournamentButton'); if (button) button.disabled = true;
+    try {
+      await roomRequest('/rest/v1/rpc/start_penalty_tournament', { method: 'POST', body: JSON.stringify({ p_tournament_id: activeTournamentMeta.id }) });
+      await refreshTournament();
+    } catch (error) { say('#onlineError', error.message); }
+  }
+  async function openTournamentMatch(matchId) {
+    try {
+      const identity = await getRoomIdentity();
+      const matches = await roomRequest(`/rest/v1/penalty_tournament_matches?select=id,player_a_id,player_b_id,room_id,room_code,status&id=eq.${encodeURIComponent(matchId)}&limit=1`);
+      const match = matches[0];
+      if (!match || ![match.player_a_id, match.player_b_id].includes(identity.user.id)) throw new Error('This fixture is not assigned to your player.');
+      if (match.status === 'pending' && !match.room_id) {
+        const result = await roomRequest('/rest/v1/rpc/create_penalty_tournament_room', { method: 'POST', body: JSON.stringify({ p_match_id: match.id, p_room_id: crypto.randomUUID(), p_code: newRoomCode() }) });
+        saveRoomMeta({ id: result.id, code: result.code, side: 'host', playerId: identity.user.id });
+        activeRoomData = null; roomMatchStarted = false; lastRoomKick = -1;
+        $('#onlineModal').classList.remove('open'); startRoomPolling(); return;
+      }
+      if (match.status === 'waiting' && !match.room_id) throw new Error('The room is still being prepared. Refresh the tournament.');
+      if (match.status === 'waiting' && match.room_code) {
+        const ownRows = await roomRequest(`/rest/v1/penalty_rooms?select=id,host_id,guest_id,status&id=eq.${encodeURIComponent(match.room_id)}&limit=1`);
+        if (!ownRows.length) { $('#roomCodeInput').value = match.room_code; await joinRoom(); return; }
+      }
+      if (match.status === 'playing' && match.room_id) {
+        const ownRows = await roomRequest(`/rest/v1/penalty_rooms?select=id,code,host_id,guest_id,status&id=eq.${encodeURIComponent(match.room_id)}&limit=1`);
+        if (!ownRows.length) throw new Error('Join this fixture using the tournament code on this device first.');
+        const room = ownRows[0];
+        saveRoomMeta({ id: room.id, code: room.code, side: room.host_id === identity.user.id ? 'host' : 'guest', playerId: identity.user.id });
+        activeRoomData = room; roomMatchStarted = true; $('#onlineModal').classList.remove('open'); startRoomPolling(); return;
+      }
+      if (match.status === 'waiting' && match.room_code) {
+        saveRoomMeta({ id: match.room_id, code: match.room_code, side: 'host', playerId: identity.user.id });
+        activeRoomData = null; roomMatchStarted = false; $('#onlineModal').classList.remove('open'); startRoomPolling(); return;
+      }
+      if (match.status === 'completed') { await refreshTournament(); return; }
+      throw new Error('This fixture is no longer available. Refresh the tournament.');
+    } catch (error) { say('#onlineError', error.message); }
+  }
   function startRoomPolling() {
     clearInterval(roomPollTimer);
     roomPollTimer = setInterval(refreshActiveRoom, 800);
@@ -725,6 +867,7 @@
     } catch (e) { say('#onlineError', e.message); $('#turnHint').textContent = 'Could not send that choice: ' + e.message; $('#choices').hidden = false; }
     finally { onlineSubmitting = false; }
   };
+  installTournamentUi();
   $('#createRoomButton').addEventListener('click', createRoom);
   $('#joinRoomButton').addEventListener('click', joinRoom);
   $('#roomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(); });
@@ -782,11 +925,17 @@
   };
   document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => $('#' + b.dataset.close).classList.remove('open')));
   document.querySelectorAll('.modal-backdrop').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m && m.id !== 'profileModal') m.classList.remove('open'); }));
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (activeOnlineId) refreshOnlineMatch(); if (activeRoomMeta) refreshActiveRoom(); if ($('#onlineModal').classList.contains('open')) loadOnlineLobby(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (activeOnlineId) refreshOnlineMatch(); if (activeRoomMeta) refreshActiveRoom(); if (activeTournamentMeta) refreshTournament(); if ($('#onlineModal').classList.contains('open')) loadOnlineLobby(); } });
   setAuthMode('signin');
   loadAccount();
   const roomFromLink = new URLSearchParams(location.search).get('room');
   if (roomFromLink) { $('#roomCodeInput').value = roomFromLink.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, '').slice(0, 10); $('#onlineModal').classList.add('open'); }
+  const tournamentFromLink = new URLSearchParams(location.search).get('tournament');
+  if (tournamentFromLink) { $('#tournamentCodeInput').value = tournamentFromLink.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, '').slice(0, 10); $('#onlineModal').classList.add('open'); }
+  try {
+    const savedTournament = JSON.parse(localStorage.getItem('pm-active-tournament') || 'null');
+    if (savedTournament?.id && savedTournament?.code && savedTournament?.playerId) { activeTournamentMeta = savedTournament; $('#tournamentCodeInput').value = savedTournament.code; startTournamentPolling(); }
+  } catch {}
   try {
     const savedRoom = JSON.parse(localStorage.getItem('pm-active-room') || 'null');
     if (savedRoom?.id && savedRoom?.code && savedRoom?.playerId && (!roomFromLink || roomFromLink.toUpperCase() === savedRoom.code)) {
