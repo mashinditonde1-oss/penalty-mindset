@@ -27,6 +27,7 @@ The required database migrations are in `supabase/migrations/`. They are applied
 7. `20261104_penalty_room_rematch_indexes.sql`
 8. `20261105_penalty_tournaments.sql`
 9. `20261105_penalty_tournament_room_guard.sql`
+10. `20261106_penalty_tournament_spectators.sql`
 
 In Supabase **Authentication → URL Configuration**, set the Site URL to `https://penalty-mindset.pages.dev` and add `https://penalty-mindset.pages.dev/**` to Redirect URLs. Signup from a local development server redirects to the live site so the confirmation link does not point at the user's own device.
 
@@ -36,7 +37,7 @@ Guest rooms use Supabase anonymous sign-ins so players can create and join a roo
 
 Players can create a shareable room or join one with a 10-character code. Both players choose their shot or dive on their own device; each turn has a shared 10-second clock, after which the server fills in any missing choice and advances the match. If a player exits, the opponent is told they disconnected and sent back to the main screen. After a completed room match, both players can request a rematch; the new head-to-head begins when both agree. Supabase resolves each kick and handles sudden death. Room games are friendly and not ranked. Signed-in players can also accept each other as friends, send a challenge, and submit verified results to the online leaderboard.
 
-Online tournaments support 3–8 players joining by a shared code. They use a round-robin schedule, so each player faces every other player. Fixtures reuse the timed penalty rooms, and the standings award 3 points for a win and 1 for a draw, with goal difference as the first tiebreaker after wins.
+Online tournaments support 3–8 players joining by a shared code. They use a round-robin schedule, so each player faces every other player. Different pairs with no shared players can play simultaneously, and all tournament members can watch live scores and recent kicks from the lobby. Fixtures reuse the timed penalty rooms; standings award 3 points for a win and 1 for a draw, with goal difference as the first tiebreaker after wins.
 
 The game is just for fun; it does not use real money.
 
