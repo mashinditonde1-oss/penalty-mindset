@@ -107,7 +107,14 @@
       const r = await fetch(PROJECT_URL + path, { method: 'POST', headers: { apikey: PUBLIC_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.msg || d.message || d.error_description || 'Could not sign in.');
-      if (!d.access_token) { say('#accountError', 'Check your email to confirm your account, then come back and sign in.'); return; }
+      if (!d.access_token) {
+        if (authMode === 'signup' && Array.isArray(d.user?.identities) && d.user.identities.length === 0) {
+          await setAuthMode('signin');
+          return say('#accountError', 'This email already has an account. Sign in with your password.');
+        }
+        say('#accountError', 'No sign-in session was returned. If you just created an account, check your email for a confirmation link.');
+        return;
+      }
       d.expires_at = Math.floor(Date.now() / 1000) + (d.expires_in || 3600);
       storeSession(d); $('#accountModal').classList.remove('open'); await loadAccount();
     } catch (e) { say('#accountError', e.message); }
