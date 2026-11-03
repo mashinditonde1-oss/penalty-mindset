@@ -17,7 +17,7 @@
   document.head.append(style);
   let session = readSession(), user = null, profile = null, friends = [], authMode = 'signin', savingMatch = false;
   let realtimeClient = null, realtimeChannel = null, activeOnlineId = null, activeOnlineMatch = null, activeOpponent = null, lastRenderedKick = 0, onlineRenderVersion = 0, onlineSubmitting = false;
-  let roomIdentity = null, activeRoomMeta = null, activeRoomData = null, roomPollTimer = null, roomClockTimer = null, roomTimeoutKey = '', roomTimeoutBusy = false, roomPollBusy = false, lastRoomKick = -1, roomSubmitting = false, roomMatchStarted = false, onlineFieldResetTimer = null;
+  let roomIdentity = null, activeRoomMeta = null, activeRoomData = null, roomPollTimer = null, roomClockTimer = null, roomTimeoutKey = '', roomTimeoutBusy = false, roomClockFallbackKey = '', roomClockFallbackStart = 0, roomPollBusy = false, lastRoomKick = -1, roomSubmitting = false, roomMatchStarted = false, onlineFieldResetTimer = null;
   try { realtimeClient = window.supabase?.createClient(PROJECT_URL, PUBLIC_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }) || null; } catch { realtimeClient = null; }
 
   function readSession() { try { const old = JSON.parse(localStorage.getItem('pm-auth-session') || 'null'); const fragment = new URLSearchParams(location.hash.slice(1)); const access_token = fragment.get('access_token'); const refresh_token = fragment.get('refresh_token'); if (access_token && refresh_token) { const fresh = { access_token, refresh_token, expires_at: Math.floor(Date.now() / 1000) + Number(fragment.get('expires_in') || 3600) }; localStorage.setItem('pm-auth-session', JSON.stringify(fresh)); history.replaceState(null, '', location.pathname + location.search); return fresh; } return old; } catch { return null; } }
@@ -595,20 +595,27 @@
   function startRoomClock(room) {
     const turnKey = `${room.id}:${room.kick_no}`;
     if (roomTimeoutKey !== turnKey) roomTimeoutKey = '';
-    if (!roomClockTimer) roomClockTimer = setInterval(() => {
-      if (!activeRoomData || activeRoomData.status !== 'playing' || !activeRoomMeta || roomTimeoutBusy) return;
+    const tick = () => {
+      if (!activeRoomData || activeRoomData.status !== 'playing' || !activeRoomMeta) return;
       const currentKey = `${activeRoomData.id}:${activeRoomData.kick_no}`;
-      const startedAt = Date.parse(activeRoomData.turn_started_at || activeRoomData.updated_at);
-      const remaining = Math.max(0, 10 - Math.floor((Date.now() - startedAt) / 1000));
+      const parsedStart = Date.parse(activeRoomData.turn_started_at || activeRoomData.updated_at);
+      if (!Number.isFinite(parsedStart) && roomClockFallbackKey !== currentKey) {
+        roomClockFallbackKey = currentKey; roomClockFallbackStart = Date.now();
+      }
+      const startedAt = Number.isFinite(parsedStart) ? parsedStart : roomClockFallbackStart;
+      const elapsedSeconds = Math.max(0, (Date.now() - startedAt) / 1000);
+      const remaining = Math.max(0, 10 - Math.floor(elapsedSeconds));
       $('#timer').textContent = `0:${String(remaining).padStart(2, '0')}`;
-      if (remaining === 0 && roomTimeoutKey !== currentKey) {
+      if (remaining === 0 && roomTimeoutKey !== currentKey && !roomTimeoutBusy) {
         roomTimeoutKey = currentKey; roomTimeoutBusy = true;
         $('#turnHint').textContent = 'Time’s up. Resolving the turn…';
         roomRequest('/rest/v1/rpc/expire_penalty_room_turn', {
           method: 'POST', body: JSON.stringify({ p_room_id: activeRoomData.id })
         }).then(refreshActiveRoom).catch((e) => say('#onlineError', e.message)).finally(() => { roomTimeoutBusy = false; });
       }
-    }, 250);
+    };
+    tick();
+    if (!roomClockTimer) roomClockTimer = setInterval(tick, 100);
   }
   async function renderOnlineState(match) {
     if (!match || !user) return;
